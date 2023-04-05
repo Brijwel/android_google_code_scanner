@@ -27,7 +27,6 @@ class MainActivity : AppCompatActivity() {
         private const val TAG = "MainActivity"
     }
 
-    private val listener = ModuleInstallProgressListener()
     private val moduleInstallClient by lazy {
         ModuleInstall.getClient(this)
     }
@@ -99,70 +98,71 @@ class MainActivity : AppCompatActivity() {
      * if TfLite is not available install TfLite immediately.
      */
     private fun checkForModuleAvailability(availableCallback: () -> Unit) {
-        moduleInstallClient.areModulesAvailable(optionalModuleApi).addOnSuccessListener {
-            if (it.areModulesAvailable()) {
-                // Modules are present on the device...
-                availableCallback()
-            } else {
-                // Modules are not present on the device...
-                val moduleInstallRequest =
-                    ModuleInstallRequest.newBuilder()
-                        .addApi(optionalModuleApi)
-                        .setListener(listener)
-                        .build()
+        /**
+         * InstallStatusListener to check TfLite module install status.
+         */
+        val installStatusListener = object : InstallStatusListener {
+            override fun onInstallStatusUpdated(update: ModuleInstallStatusUpdate) {
+                // Progress info is only set when modules are in the progress of downloading.
+                update.progressInfo?.let {
+                    val progress = (it.bytesDownloaded * 100 / it.totalBytesToDownload).toInt()
+                    // Set the progress for the progress bar.
+                    //progressBar?.progress = progress
+                    //progressBar?.isVisible = progress > 100
+                    Log.d(TAG, "onInstallStatusUpdated: progress $progress")
+                }
 
-                moduleInstallClient.installModules(moduleInstallRequest)
-                    .addOnSuccessListener { moduleInstallResponse ->
-                        if (moduleInstallResponse.areModulesAlreadyInstalled()) {
-                            // Modules are already installed when the request is sent.
-                            availableCallback()
-                        }
-                    }.addOnFailureListener { e ->
-                        // Handle failure…
-                        toast(e.message ?: "Something went wrong!")
+                when (update.installState) {
+                    STATE_PENDING,
+                    STATE_INSTALLING,
+                    STATE_DOWNLOADING -> {
+                        progressBar?.isVisible = true
                     }
-            }
-        }.addOnFailureListener { e ->
-            // Handle failure…
-            toast(e.message ?: "Something went wrong!")
-        }
-
-
-    }
-
-    /**
-     * InstallStatusListener to check TfLite module install status.
-     */
-    inner class ModuleInstallProgressListener : InstallStatusListener {
-        override fun onInstallStatusUpdated(update: ModuleInstallStatusUpdate) {
-            // Progress info is only set when modules are in the progress of downloading.
-            update.progressInfo?.let {
-                val progress = (it.bytesDownloaded * 100 / it.totalBytesToDownload).toInt()
-                // Set the progress for the progress bar.
-                //progressBar?.progress = progress
-                //progressBar?.isVisible = progress > 100
-                Log.d(TAG, "onInstallStatusUpdated: progress $progress")
-            }
-
-            when (update.installState) {
-                STATE_PENDING,
-                STATE_INSTALLING,
-                STATE_DOWNLOADING -> {
-                    progressBar?.isVisible = true
+                    STATE_CANCELED,
+                    STATE_FAILED -> {
+                        progressBar?.isVisible = false
+                        moduleInstallClient.unregisterListener(this)
+                    }
+                    STATE_COMPLETED -> {
+                        availableCallback()
+                        progressBar?.isVisible = false
+                        moduleInstallClient.unregisterListener(this)
+                    }
+                    else -> progressBar?.isVisible = false
                 }
-                STATE_CANCELED,
-                STATE_FAILED -> {
-                    progressBar?.isVisible = false
-                    moduleInstallClient.unregisterListener(this)
-                }
-                STATE_COMPLETED -> {
-                    launchGoogleCodeScanner()
-                    progressBar?.isVisible = false
-                    moduleInstallClient.unregisterListener(this)
-                }
-                else -> progressBar?.isVisible = false
             }
         }
+        moduleInstallClient
+            .areModulesAvailable(optionalModuleApi)
+            .addOnSuccessListener {
+                if (it.areModulesAvailable()) {
+                    // Modules are present on the device...
+                    availableCallback()
+                } else {
+                    // Modules are not present on the device...
+                    val moduleInstallRequest =
+                        ModuleInstallRequest.newBuilder()
+                            .addApi(optionalModuleApi)
+                            .setListener(installStatusListener)
+                            .build()
+
+                    moduleInstallClient.installModules(moduleInstallRequest)
+                        .addOnSuccessListener { moduleInstallResponse ->
+                            if (moduleInstallResponse.areModulesAlreadyInstalled()) {
+                                // Modules are already installed when the request is sent.
+                                availableCallback()
+                            }
+                        }.addOnFailureListener { e ->
+                            // Handle failure…
+                            toast(e.message ?: "Something went wrong!")
+                        }
+                }
+            }.addOnFailureListener { e ->
+                // Handle failure…
+                toast(e.message ?: "Something went wrong!")
+            }
+
+
     }
 
     /**
