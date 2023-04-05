@@ -1,6 +1,8 @@
 package com.brijwel.googlecodescanner
 
+import android.content.Context
 import android.os.Bundle
+import android.util.Log
 import android.widget.Button
 import android.widget.TextView
 import android.widget.Toast
@@ -21,6 +23,9 @@ import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
 
 
 class MainActivity : AppCompatActivity() {
+    companion object {
+        private const val TAG = "MainActivity"
+    }
 
     private val listener = ModuleInstallProgressListener()
     private val moduleInstallClient by lazy {
@@ -35,41 +40,65 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
         progressBar = findViewById(R.id.progress)
 
-        if (checkPlayServices()) {
-            moduleInstallClient.deferredInstall(optionalModuleApi)
-        }
+        deferredInstallModuleIfNotAvailable()
         findViewById<Button>(R.id.scan).setOnClickListener {
-            if (checkPlayServices(true)) {
-                checkForAvailability {
-                    val options = GmsBarcodeScannerOptions.Builder().setBarcodeFormats(
-                        Barcode.FORMAT_QR_CODE, Barcode.FORMAT_AZTEC
-                    ).allowManualInput().build()
-
-                    val scanner = GmsBarcodeScanning.getClient(this, options)
-                    scanner
-                        .startScan()
-                        .addOnSuccessListener { barcode ->
-                        // Task completed successfully
-                        val rawValue: String? = barcode.rawValue
-                        findViewById<TextView>(R.id.result).text = rawValue
-                    }.addOnCanceledListener {
-                        // Task canceled
-                    }.addOnFailureListener { e ->
-                        // Task failed with an exception
-                        Toast.makeText(
-                            this, e.message ?: "Something went wrong!", Toast.LENGTH_SHORT
-                        ).show()
-                    }
-                }
+            if (checkPlayServices()) {
+                launchGoogleCodeScanner()
             } else {
-                Toast.makeText(
-                    this, "No Google Play Service Available!", Toast.LENGTH_SHORT
-                ).show()
+                toast("No Google Play Service Available!")
             }
         }
     }
 
-    private fun checkForAvailability(availableCallback: () -> Unit) {
+    /**
+     * Launch Google Code Scanner to scan bar code.
+     */
+    private fun launchGoogleCodeScanner() {
+        checkForModuleAvailability {
+            val options = GmsBarcodeScannerOptions
+                .Builder()
+                .setBarcodeFormats(
+                    Barcode.FORMAT_QR_CODE
+                )
+                .build()
+
+            val scanner = GmsBarcodeScanning.getClient(this, options)
+            scanner
+                .startScan()
+                .addOnSuccessListener { barcode ->
+                    // Task completed successfully
+                    val rawValue: String? = barcode.rawValue
+                    if (rawValue.isNullOrEmpty().not()) {
+                        findViewById<TextView>(R.id.result).text = rawValue
+                    }
+
+                }.addOnFailureListener { e ->
+                    // Task failed with an exception
+                    toast(e.message ?: "Something went wrong!")
+                }
+        }
+    }
+
+    /**
+     * Check if Play Services is available and if TfLite module is available.
+     * if not install TfLite in deferral manner.
+     */
+    private fun deferredInstallModuleIfNotAvailable() {
+        if (checkPlayServices()) {
+            moduleInstallClient
+                .areModulesAvailable(optionalModuleApi)
+                .addOnSuccessListener {
+                    if (it.areModulesAvailable().not())
+                        moduleInstallClient.deferredInstall(optionalModuleApi)
+                }
+        }
+    }
+
+    /**
+     * Check if TfLite is available and trigger availableCallback lambda function.
+     * if TfLite is not available install TfLite immediately.
+     */
+    private fun checkForModuleAvailability(availableCallback: () -> Unit) {
         moduleInstallClient.areModulesAvailable(optionalModuleApi).addOnSuccessListener {
             if (it.areModulesAvailable()) {
                 // Modules are present on the device...
@@ -77,8 +106,10 @@ class MainActivity : AppCompatActivity() {
             } else {
                 // Modules are not present on the device...
                 val moduleInstallRequest =
-                    ModuleInstallRequest.newBuilder().addApi(optionalModuleApi)
-                        .setListener(listener).build()
+                    ModuleInstallRequest.newBuilder()
+                        .addApi(optionalModuleApi)
+                        .setListener(listener)
+                        .build()
 
                 moduleInstallClient.installModules(moduleInstallRequest)
                     .addOnSuccessListener { moduleInstallResponse ->
@@ -88,21 +119,20 @@ class MainActivity : AppCompatActivity() {
                         }
                     }.addOnFailureListener { e ->
                         // Handle failure…
-                        Toast.makeText(
-                            this, e.message ?: "Something went wrong!", Toast.LENGTH_SHORT
-                        ).show()
+                        toast(e.message ?: "Something went wrong!")
                     }
             }
         }.addOnFailureListener { e ->
             // Handle failure…
-            Toast.makeText(
-                this, e.message ?: "Something went wrong!", Toast.LENGTH_SHORT
-            ).show()
+            toast(e.message ?: "Something went wrong!")
         }
 
 
     }
 
+    /**
+     * InstallStatusListener to check TfLite module install status.
+     */
     inner class ModuleInstallProgressListener : InstallStatusListener {
         override fun onInstallStatusUpdated(update: ModuleInstallStatusUpdate) {
             // Progress info is only set when modules are in the progress of downloading.
@@ -111,18 +141,29 @@ class MainActivity : AppCompatActivity() {
                 // Set the progress for the progress bar.
                 progressBar?.progress = progress
                 progressBar?.isVisible = progress > 100
+                Log.d(TAG, "onInstallStatusUpdated: progress $progress")
             }
 
-            if (isTerminateState(update.installState)) {
-                moduleInstallClient.unregisterListener(this)
+            when (update.installState) {
+                STATE_PENDING,
+                STATE_INSTALLING,
+                STATE_DOWNLOADING -> {
+                    progressBar?.isVisible = true
+                }
+                STATE_CANCELED,
+                STATE_FAILED -> {
+                    progressBar?.isVisible = false
+                    moduleInstallClient.unregisterListener(this)
+                }
+                STATE_COMPLETED -> {
+                    launchGoogleCodeScanner()
+                    progressBar?.isVisible = false
+                    moduleInstallClient.unregisterListener(this)
+                }
+                else -> progressBar?.isVisible = false
             }
-        }
-
-        private fun isTerminateState(@ModuleInstallStatusUpdate.InstallState state: Int): Boolean {
-            return state == STATE_CANCELED || state == STATE_COMPLETED || state == STATE_FAILED
         }
     }
-
 
     /**
      * Check the device to make sure it has the Google Play Services APK. If
@@ -138,5 +179,6 @@ class MainActivity : AppCompatActivity() {
         return true
     }
 
-
+    private fun Context.toast(message: String) =
+        Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
 }
