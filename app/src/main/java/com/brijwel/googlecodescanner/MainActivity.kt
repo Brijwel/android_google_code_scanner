@@ -139,8 +139,8 @@ class MainActivity : AppCompatActivity() {
             update.progressInfo?.let {
                 val progress = (it.bytesDownloaded * 100 / it.totalBytesToDownload).toInt()
                 // Set the progress for the progress bar.
-                progressBar?.progress = progress
-                progressBar?.isVisible = progress > 100
+                //progressBar?.progress = progress
+                //progressBar?.isVisible = progress > 100
                 Log.d(TAG, "onInstallStatusUpdated: progress $progress")
             }
 
